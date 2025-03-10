@@ -15,19 +15,16 @@ fi
 
 echo "Testing SpinupWP API connection..."
 
-# Test the sites endpoint
-echo "Testing /api/sites endpoint..."
-curl -s -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/api/sites" | jq
+# Test the official documented endpoint
+echo "Testing documented endpoint https://api.spinupwp.app/v1/servers"
+curl -v -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.app/v1/servers" | jq
 
-# Test the servers endpoint
-echo "Testing /api/servers endpoint..."
-curl -s -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/api/servers" | jq
+# Try without www
+echo "Testing without www https://spinupwp.app/v1/servers"
+curl -v -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/v1/servers" | jq
 
-# Test without version prefix
-echo "Testing /api/v1/servers endpoint..."
-curl -s -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/api/v1/servers" | jq
-
-echo "Testing /api/v1/sites endpoint..."
-curl -s -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/api/v1/sites" | jq
+# Try alternative formats
+echo "Testing API format https://api.spinupwp.com/v1/servers"
+curl -v -H "Authorization: Bearer $API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.com/v1/servers" | jq
 
 echo "Testing complete."

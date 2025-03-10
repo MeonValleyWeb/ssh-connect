@@ -256,10 +256,12 @@ import_from_spinupwp() {
         exit 1
     fi
     
-    echo "Fetching servers from SpinupWP API..."
+    # Debug information
+    echo "Making API request to: https://api.spinupwp.app/v1/servers"
+    echo "Response status: $(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.app/v1/servers")"
     
-    # Make API request with the correct API URL
-    local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/api/sites")
+    # Make API request using the official documented URL
+    local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.app/v1/servers")
     
     # Check for errors
     if ! echo "$response" | jq -e '.data' > /dev/null; then
@@ -268,19 +270,26 @@ import_from_spinupwp() {
         exit 1
     fi
     
-    # Process response for sites data
+    # Process response for server data
     echo "[]" > "$SERVERS_FILE.tmp"
     
     local count=$(echo "$response" | jq '.data | length')
+    if [ "$count" = "null" ] || [ "$count" -eq 0 ]; then
+        echo "Error: No servers found or API response invalid."
+        echo "Response: $response"
+        rm "$SERVERS_FILE.tmp"
+        exit 1
+    fi
+    
     for i in $(seq 0 $(($count - 1))); do
-        local site_name=$(echo "$response" | jq -r ".data[$i].domain")
-        local server_ip=$(echo "$response" | jq -r ".data[$i].server.ip_address")
-        local server_name=$(echo "$response" | jq -r ".data[$i].server.name")
-        local site_id=$(echo "$response" | jq -r ".data[$i].id")
+        local server_name=$(echo "$response" | jq -r ".data[$i].name")
+        local server_ip=$(echo "$response" | jq -r ".data[$i].ip_address")
+        local server_id=$(echo "$response" | jq -r ".data[$i].id")
+        local provider=$(echo "$response" | jq -r ".data[$i].provider // \"unknown\"")
         
         # Add to servers file
-        jq --arg name "$site_name" --arg ip "$server_ip" --arg server_name "$server_name" --arg site_id "$site_id" \
-           '. += [{"name": $name, "ip": $ip, "user": "root", "port": "22", "id_file": null, "server_name": $server_name, "site_id": $site_id}]' \
+        jq --arg name "$server_name" --arg ip "$server_ip" --arg server_id "$server_id" --arg provider "$provider" \
+           '. += [{"name": $name, "ip": $ip, "user": "root", "port": "22", "id_file": null, "provider": $provider, "server_id": $server_id}]' \
            "$SERVERS_FILE.tmp" > "$SERVERS_FILE.tmp2"
         
         mv "$SERVERS_FILE.tmp2" "$SERVERS_FILE.tmp"
