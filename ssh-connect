@@ -140,14 +140,11 @@ if [ ! -f "$SPINUPWP_CONFIG" ]; then
     cat > "$SPINUPWP_CONFIG" << EOF
 # SpinupWP API Configuration
 
-# Your SpinupWP API key
-SPINUPWP_API_KEY=""
-
-# Your SpinupWP API secret
-SPINUPWP_API_SECRET=""
+# Your SpinupWP API token
+SPINUPWP_API_TOKEN=""
 EOF
     echo "Created SpinupWP configuration at $SPINUPWP_CONFIG"
-    echo "Please edit this file to set your SpinupWP API credentials."
+    echo "Please edit this file to set your SpinupWP API token."
 fi
 
 # Load configuration
@@ -254,15 +251,15 @@ import_from_spinupwp() {
     check_jq
     
     # Check API credentials
-    if [ -z "$SPINUPWP_API_KEY" ]; then
-        echo "Error: SpinupWP API key not configured in $SPINUPWP_CONFIG"
+    if [ -z "$SPINUPWP_API_TOKEN" ]; then
+        echo "Error: SpinupWP API token not configured in $SPINUPWP_CONFIG"
         exit 1
     fi
     
     echo "Fetching servers from SpinupWP API..."
     
     # Make API request
-    local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_KEY" -H "Accept: application/json" "https://api.spinupwp.com/v1/servers")
+    local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.com/v1/servers")
     
     # Check for errors
     if ! echo "$response" | jq -e '.data' > /dev/null; then
