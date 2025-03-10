@@ -26,6 +26,10 @@ DEFAULT_USER="root"
 DEFAULT_PORT=22
 DEFAULT_IDENTITY="$HOME/.ssh/id_rsa"
 DEFAULT_PROTOCOL="ssh"
+PASSWORD_AUTH=false
+SPECIFIC_USER=""
+CONNECT_TO_SITE=false
+USER_SITES_MAPPING_FILE="$CONFIG_DIR/site_users.json"
 
 # Parse command line arguments
 SFTP=false
@@ -48,7 +52,10 @@ display_help() {
     echo "  -s, --sftp              Use SFTP instead of SSH"
     echo "  -c, --no-clipboard      Don't copy to clipboard"
     echo "  -l, --list              List all configured servers"
-    echo "  -i, --import FILE       Import servers from legacy .servers file"
+    echo "  --sites               Connect to a site on the server
+  -p, --password         Use password authentication instead of key
+  -u, --user USER        Specify a user to connect with
+  -i, --import FILE       Import servers from legacy .servers file"
     echo "      --spinup            Import servers from SpinupWP API"
     echo
     echo "CONFIGURATION:"
@@ -79,6 +86,23 @@ while (( "$#" )); do
             ;;
         -l|--list)
             LIST=true
+            shift
+            ;;
+        -p|--password)
+            PASSWORD_AUTH=true
+            shift
+            ;;
+        -u|--user)
+            if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
+                SPECIFIC_USER="$2"
+                shift 2
+            else
+                echo "Error: Argument for $1 is missing" >&2
+                exit 1
+            fi
+            ;;
+        --sites)
+            CONNECT_TO_SITE=true
             shift
             ;;
         -i|--import)
@@ -134,6 +158,9 @@ EOF
     echo "Created default configuration at $CONFIG_FILE"
     echo "Please edit this file to set your preferences."
 fi
+
+# Initialize site users mapping file
+init_site_users_mapping()
 
 # Create default SpinupWP config if it doesn't exist
 if [ ! -f "$SPINUPWP_CONFIG" ]; then
@@ -365,6 +392,7 @@ build_connection_string() {
     local server_id="$1"
     local user="$2"
     local protocol="$3"
+    local password_auth="$4"
     
     local ip=$(jq -r ".[$server_id].ip" "$SERVERS_FILE")
     local port=$(jq -r ".[$server_id].port // 22" "$SERVERS_FILE")
@@ -378,7 +406,7 @@ build_connection_string() {
     
     # Build identity string
     local identity_str=""
-    if [ "$id_file" != "null" ] && [ -n "$id_file" ] && [ "$id_file" != "---" ]; then
+    if [ "$password_auth" != "true" ] && [ "$id_file" != "null" ] && [ -n "$id_file" ] && [ "$id_file" != "---" ]; then
         # Replace ~ with $HOME
         id_file="${id_file/#\~/$HOME}"
         identity_str="-i $id_file "
@@ -434,11 +462,23 @@ if [ "$SFTP" = true ]; then
     PROTOCOL="sftp"
 fi
 
-# Get user
-USER=$(select_user "$server_id")
+# Main logic after server selection
+if [ -n "$SPECIFIC_USER" ]; then
+    USER="$SPECIFIC_USER"
+else
+    if [ "$CONNECT_TO_SITE" = true ]; then
+        if select_site "$server_id"; then
+            USER="$SITE_USERNAME"
+        else
+            exit 1
+        fi
+    else
+        USER=$(select_user "$server_id")
+    fi
+fi
 
 # Build SSH connection command
-SSH_CMD=$(build_connection_string "$server_id" "$USER" "$PROTOCOL")
+SSH_CMD=$(build_connection_string "$server_id" "$USER" "$PROTOCOL" "$PASSWORD_AUTH")
 
 # Display and copy to clipboard
 echo -e "\n${GREEN}Connection:${NC} $SSH_CMD"
@@ -451,4 +491,10 @@ fi
 # Connect directly if desired
 echo -e "\n${CYAN}Press Enter to connect or Ctrl+C to exit${NC}"
 read -r
-$SSH_CMD
+
+# If connecting to a site, add the path to change to
+if [ "$CONNECT_TO_SITE" = true ] && [ -n "$SITE_PATH" ]; then
+    $SSH_CMD -t "cd $SITE_PATH && bash --login"
+else
+    $SSH_CMD
+fi
