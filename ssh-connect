@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 #
-# SSH Connect - A modern SSH connection manager
-# A standalone shell script for managing SSH connections on macOS
-# Works with SpinupWP API and local configuration
+# Interactive SSH Connect - A menu-driven SSH manager
+# Optimized for managing servers and sites on SpinupWP
 #
 
 # Constants
@@ -11,6 +10,7 @@ CONFIG_DIR="$HOME/.ssh-connect"
 SERVERS_FILE="$CONFIG_DIR/servers.json"
 CONFIG_FILE="$CONFIG_DIR/config"
 SPINUPWP_CONFIG="$CONFIG_DIR/spinupwp"
+USER_SITES_MAPPING_FILE="$CONFIG_DIR/site_users.json"
 
 # Colors
 RED='\033[0;31m'
@@ -26,125 +26,28 @@ DEFAULT_USER="root"
 DEFAULT_PORT=22
 DEFAULT_IDENTITY="$HOME/.ssh/id_rsa"
 DEFAULT_PROTOCOL="ssh"
-PASSWORD_AUTH=false
-SPECIFIC_USER=""
-CONNECT_TO_SITE=false
-USER_SITES_MAPPING_FILE="$CONFIG_DIR/site_users.json"
+SUDO_USER="" # Will be loaded from config
+COMPOSER_COMMANDS=("update" "install" "dump-autoload" "require" "remove")
+BEDROCK_PATHS=("web/wp" "wp" "app/uploads" "app/plugins")
 
-# Parse command line arguments
-SFTP=false
-CLIPBOARD=true
-LIST=false
-IMPORT=""
-SPINUP=false
+# Create/load configuration files
+init_config() {
+    # Create config directory if it doesn't exist
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+        echo "Created configuration directory at $CONFIG_DIR"
+    fi
 
-# Function to display help
-display_help() {
-    echo "SSH Connect - A modern SSH connection manager"
-    echo "Version: $VERSION"
-    echo
-    echo "USAGE:"
-    echo "  ssh-connect [options]"
-    echo
-    echo "OPTIONS:"
-    echo "  -h, --help              Display this help"
-    echo "  -v, --version           Display version information"
-    echo "  -s, --sftp              Use SFTP instead of SSH"
-    echo "  -c, --no-clipboard      Don't copy to clipboard"
-    echo "  -l, --list              List all configured servers"
-    echo "  --sites               Connect to a site on the server
-  -p, --password         Use password authentication instead of key
-  -u, --user USER        Specify a user to connect with
-  -i, --import FILE       Import servers from legacy .servers file"
-    echo "      --spinup            Import servers from SpinupWP API"
-    echo
-    echo "CONFIGURATION:"
-    echo "  Configuration is stored in $CONFIG_DIR"
-    echo "  Edit $CONFIG_FILE to change default settings"
-    echo "  Servers are stored in $SERVERS_FILE"
-}
-
-# Parse arguments
-while (( "$#" )); do
-    case "$1" in
-        -h|--help)
-            display_help
-            exit 0
-            ;;
-        -v|--version)
-            echo "SSH Connect - Version $VERSION"
-            echo "Copyright (c) 2025 - MIT License"
-            exit 0
-            ;;
-        -s|--sftp)
-            SFTP=true
-            shift
-            ;;
-        -c|--no-clipboard)
-            CLIPBOARD=false
-            shift
-            ;;
-        -l|--list)
-            LIST=true
-            shift
-            ;;
-        -p|--password)
-            PASSWORD_AUTH=true
-            shift
-            ;;
-        -u|--user)
-            if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
-                SPECIFIC_USER="$2"
-                shift 2
-            else
-                echo "Error: Argument for $1 is missing" >&2
-                exit 1
-            fi
-            ;;
-        --sites)
-            CONNECT_TO_SITE=true
-            shift
-            ;;
-        -i|--import)
-            if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
-                IMPORT="$2"
-                shift 2
-            else
-                IMPORT="$HOME/.servers"
-                shift 1
-            fi
-            ;;
-        --spinup)
-            SPINUP=true
-            shift
-            ;;
-        --) # end argument parsing
-            shift
-            break
-            ;;
-        -*|--*=) # unsupported flags
-            echo "Error: Unsupported flag $1" >&2
-            exit 1
-            ;;
-        *) # preserve positional arguments
-            shift
-            ;;
-    esac
-done
-
-# Create config directory if it doesn't exist
-if [ ! -d "$CONFIG_DIR" ]; then
-    mkdir -p "$CONFIG_DIR"
-    echo "Created configuration directory at $CONFIG_DIR"
-fi
-
-# Create default config if it doesn't exist
-if [ ! -f "$CONFIG_FILE" ]; then
-    cat > "$CONFIG_FILE" << EOF
+    # Create default config if it doesn't exist
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat > "$CONFIG_FILE" << EOF
 # SSH Connect Configuration
 
 # Default SSH user
 DEFAULT_USER="root"
+
+# Default sudo user (for server management)
+SUDO_USER=""
 
 # Default SSH port
 DEFAULT_PORT=22
@@ -155,39 +58,38 @@ DEFAULT_IDENTITY="$HOME/.ssh/id_rsa"
 # Default connection protocol (ssh or sftp)
 DEFAULT_PROTOCOL="ssh"
 EOF
-    echo "Created default configuration at $CONFIG_FILE"
-    echo "Please edit this file to set your preferences."
-fi
+        echo "Created default configuration at $CONFIG_FILE"
+        echo "Please edit this file to set your preferences."
+    fi
 
-# Initialize site users mapping file
-init_site_users_mapping()
+    # Initialize site users mapping file
+    if [ ! -f "$USER_SITES_MAPPING_FILE" ]; then
+        echo "{}" > "$USER_SITES_MAPPING_FILE"
+        echo "Created site users mapping file at $USER_SITES_MAPPING_FILE"
+    fi
 
-# Create default SpinupWP config if it doesn't exist
-if [ ! -f "$SPINUPWP_CONFIG" ]; then
-    cat > "$SPINUPWP_CONFIG" << EOF
+    # Create default SpinupWP config if it doesn't exist
+    if [ ! -f "$SPINUPWP_CONFIG" ]; then
+        cat > "$SPINUPWP_CONFIG" << EOF
 # SpinupWP API Configuration
 
 # Your SpinupWP API token
 SPINUPWP_API_TOKEN=""
 EOF
-    echo "Created SpinupWP configuration at $SPINUPWP_CONFIG"
-    echo "Please edit this file to set your SpinupWP API token."
-fi
+        echo "Created SpinupWP configuration at $SPINUPWP_CONFIG"
+        echo "Please edit this file to set your SpinupWP API token."
+    fi
 
-# Load configuration
-if [ -f "$CONFIG_FILE" ]; then
-    source "$CONFIG_FILE"
-fi
+    # Load configuration
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+    fi
 
-# Load SpinupWP configuration if needed
-if [ "$SPINUP" = true ]; then
+    # Load SpinupWP configuration
     if [ -f "$SPINUPWP_CONFIG" ]; then
         source "$SPINUPWP_CONFIG"
-    else
-        echo "Error: SpinupWP configuration file not found."
-        exit 1
     fi
-fi
+}
 
 # Check if jq is installed
 check_jq() {
@@ -198,7 +100,7 @@ check_jq() {
     fi
 }
 
-# Function to handle JSON operations
+# Function to ensure servers file exists
 ensure_servers_file() {
     if [ ! -f "$SERVERS_FILE" ]; then
         echo "[]" > "$SERVERS_FILE"
@@ -220,275 +122,21 @@ list_servers() {
     
     echo -e "\n${YELLOW}Configured Servers:${NC}"
     echo "---------------------------------------------------------------------------------------------------------"
-    printf "%-4s %-30s %-20s %-15s %-8s %-20s\n" "ID" "Name" "IP" "User" "Port" "Identity"
+    printf "%-4s %-30s %-20s %-15s %-8s %-20s\n" "ID" "Name" "IP" "User" "Port" "Sites"
     echo "---------------------------------------------------------------------------------------------------------"
     
     for i in $(seq 0 $(($count - 1))); do
         local name=$(jq -r ".[$i].name" "$SERVERS_FILE")
         local ip=$(jq -r ".[$i].ip" "$SERVERS_FILE")
-        local user=$(jq -r ".[$i].user // \"---\"" "$SERVERS_FILE")
+        local user=$(jq -r ".[$i].user // \"$SUDO_USER\"" "$SERVERS_FILE")
         local port=$(jq -r ".[$i].port // 22" "$SERVERS_FILE")
-        local id_file=$(jq -r ".[$i].id_file // \"---\"" "$SERVERS_FILE")
+        local site_count=$(jq -r ".[$i].sites | length" "$SERVERS_FILE")
         
-        printf "%-4s %-30s %-20s %-15s %-8s %-20s\n" "$i" "${name:0:30}" "${ip:0:20}" "${user:0:15}" "$port" "${id_file:0:20}"
+        printf "%-4s %-30s %-20s %-15s %-8s %-20s\n" "$i" "${name:0:30}" "${ip:0:20}" "${user:0:15}" "$port" "$site_count sites"
     done
     
     return 0
 }
-
-# Function to import servers from legacy .servers file
-import_from_legacy() {
-    check_jq
-    local file="$1"
-    
-    if [ ! -f "$file" ]; then
-        echo "Error: File $file not found."
-        exit 1
-    fi
-    
-    # Create a new JSON array
-    echo "[]" > "$SERVERS_FILE.tmp"
-    
-    # Read file line by line
-    local index=0
-    while IFS=, read -r name ip user port id_file; do
-        # Skip empty lines
-        if [ -z "$name" ] || [ -z "$ip" ]; then
-            continue
-        fi
-        
-        # Convert to proper JSON
-        jq --arg name "$name" --arg ip "$ip" --arg user "$user" --arg port "$port" --arg id_file "$id_file" \
-           '. += [{"name": $name, "ip": $ip, "user": $user, "port": ($port | if . == "" then "22" else . end), "id_file": $id_file}]' \
-           "$SERVERS_FILE.tmp" > "$SERVERS_FILE.tmp2"
-        
-        mv "$SERVERS_FILE.tmp2" "$SERVERS_FILE.tmp"
-        index=$((index + 1))
-    done < "$file"
-    
-    # Sort by name
-    jq 'sort_by(.name)' "$SERVERS_FILE.tmp" > "$SERVERS_FILE"
-    rm "$SERVERS_FILE.tmp"
-    
-    echo "Imported $index servers from $file"
-}
-
-# Function to import servers from SpinupWP API
-import_from_spinupwp() {
-    check_jq
-    
-    # Check API credentials
-    if [ -z "$SPINUPWP_API_TOKEN" ]; then
-        echo "Error: SpinupWP API token not configured in $SPINUPWP_CONFIG"
-        exit 1
-    fi
-    
-    # Make API request using the correct URL as confirmed by testing
-    echo "Fetching servers from SpinupWP API..."
-    local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.app/v1/servers")
-    
-    # Check for errors
-    if ! echo "$response" | jq -e '.data' > /dev/null; then
-        echo "Error: Failed to fetch servers from SpinupWP API"
-        echo "Response: $response"
-        exit 1
-    fi
-    
-    # Process response for server data
-    echo "[]" > "$SERVERS_FILE.tmp"
-    
-    local count=$(echo "$response" | jq '.data | length')
-    if [ "$count" = "null" ] || [ "$count" -eq 0 ]; then
-        echo "Error: No servers found or API response invalid."
-        echo "Response: $response"
-        rm "$SERVERS_FILE.tmp"
-        exit 1
-    fi
-    
-    for i in $(seq 0 $(($count - 1))); do
-        local server_name=$(echo "$response" | jq -r ".data[$i].name")
-        local server_ip=$(echo "$response" | jq -r ".data[$i].ip_address")
-        local server_id=$(echo "$response" | jq -r ".data[$i].id")
-        local provider=$(echo "$response" | jq -r ".data[$i].provider // \"unknown\"")
-        
-        # Add to servers file
-        jq --arg name "$server_name" --arg ip "$server_ip" --arg server_id "$server_id" --arg provider "$provider" \
-           '. += [{"name": $name, "ip": $ip, "user": "root", "port": "22", "id_file": null, "provider": $provider, "server_id": $server_id}]' \
-           "$SERVERS_FILE.tmp" > "$SERVERS_FILE.tmp2"
-        
-        mv "$SERVERS_FILE.tmp2" "$SERVERS_FILE.tmp"
-    done
-    
-    # Sort by name
-    jq 'sort_by(.name)' "$SERVERS_FILE.tmp" > "$SERVERS_FILE"
-    rm "$SERVERS_FILE.tmp"
-    
-    echo "Imported $count servers from SpinupWP API"
-}
-
-# Function to select a server
-select_server() {
-    local count=$(jq 'length' "$SERVERS_FILE")
-    
-    if [ "$count" -eq 0 ]; then
-        echo "No servers configured."
-        return 1
-    fi
-    
-    echo -e "\n${CYAN}Select a server (ID):${NC} "
-    read -r server_id
-    
-    # Validate input
-    if ! [[ "$server_id" =~ ^[0-9]+$ ]] || [ "$server_id" -ge "$count" ]; then
-        echo "Error: Invalid server ID"
-        return 1
-    fi
-    
-    return 0
-}
-
-# Function to select a user
-select_user() {
-    local server_id="$1"
-    local user=$(jq -r ".[$server_id].user" "$SERVERS_FILE")
-    
-    # If no user specified, use default
-    if [ "$user" = "null" ] || [ -z "$user" ] || [ "$user" = "---" ]; then
-        echo "$DEFAULT_USER"
-        return 0
-    fi
-    
-    # If only one user, use it
-    if [[ ! "$user" =~ "," ]]; then
-        echo "$user"
-        return 0
-    fi
-    
-    # If multiple users, let the user choose
-    echo -e "\n${CYAN}Available users:${NC}"
-    local i=0
-    IFS=',' read -ra USERS <<< "$user"
-    for u in "${USERS[@]}"; do
-        echo "$i. $u"
-        i=$((i + 1))
-    done
-    
-    echo -e "\n${CYAN}Select a user (0-$((i-1))):${NC} "
-    read -r user_id
-    
-    # Validate input
-    if ! [[ "$user_id" =~ ^[0-9]+$ ]] || [ "$user_id" -ge "$i" ]; then
-        echo "Invalid selection, using first user"
-        echo "${USERS[0]}"
-        return 0
-    fi
-    
-    echo "${USERS[$user_id]}"
-    return 0
-}
-
-# Function to build connection string
-build_connection_string() {
-    local server_id="$1"
-    local user="$2"
-    local protocol="$3"
-    local password_auth="$4"
-    
-    local ip=$(jq -r ".[$server_id].ip" "$SERVERS_FILE")
-    local port=$(jq -r ".[$server_id].port // 22" "$SERVERS_FILE")
-    local id_file=$(jq -r ".[$server_id].id_file // \"$DEFAULT_IDENTITY\"" "$SERVERS_FILE")
-    
-    # Build port string
-    local port_str=""
-    if [ "$port" != "22" ]; then
-        port_str="-p $port "
-    fi
-    
-    # Build identity string
-    local identity_str=""
-    if [ "$password_auth" != "true" ] && [ "$id_file" != "null" ] && [ -n "$id_file" ] && [ "$id_file" != "---" ]; then
-        # Replace ~ with $HOME
-        id_file="${id_file/#\~/$HOME}"
-        identity_str="-i $id_file "
-    fi
-    
-    # Build connection string
-    echo "$protocol $identity_str$port_str$user@$ip"
-}
-
-# Function to copy to clipboard
-copy_to_clipboard() {
-    local string="$1"
-    echo "$string" | pbcopy
-    echo -e "${GREEN}Command copied to clipboard!${NC} Paste to connect."
-}
-
-# Function to select a site from a server
-select_site() {
-    local server_id="$1"
-    
-    # Get sites for the server
-    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
-    local site_count=$(echo "$sites" | jq 'length')
-    
-    if [ "$site_count" -eq 0 ]; then
-        echo "No sites found for this server."
-        return 1
-    fi
-    
-    echo -e "\n${CYAN}Sites on this server:${NC}"
-    echo "---------------------------------------------------------------------------------------------------------"
-    printf "%-4s %-40s %-15s %-40s\n" "ID" "Domain" "Username" "Path"
-    echo "---------------------------------------------------------------------------------------------------------"
-    
-    for i in $(seq 0 $(($site_count - 1))); do
-        local domain=$(echo "$sites" | jq -r ".[$i].domain")
-        local username=$(echo "$sites" | jq -r ".[$i].username")
-        local path=$(echo "$sites" | jq -r ".[$i].path")
-        
-        printf "%-4s %-40s %-15s %-40s\n" "$i" "${domain:0:40}" "${username:0:15}" "${path:0:40}"
-    done
-    
-    echo -e "\n${CYAN}Select a site (ID):${NC} "
-    read -r site_id
-    
-    # Validate input
-    if ! [[ "$site_id" =~ ^[0-9]+$ ]] || [ "$site_id" -ge "$site_count" ]; then
-        echo "Error: Invalid site ID"
-        return 1
-    fi
-    
-    # Get site details
-    local domain=$(echo "$sites" | jq -r ".[$site_id].domain")
-    local username=$(echo "$sites" | jq -r ".[$site_id].username")
-    local path=$(echo "$sites" | jq -r ".[$site_id].path")
-    
-    # Check for custom username in site_users.json
-    if [ -f "$USER_SITES_MAPPING_FILE" ]; then
-        local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
-        local custom_username=$(jq -r --arg server "$server_name" --arg domain "$domain" '.[$server][$domain] // ""' "$USER_SITES_MAPPING_FILE")
-        if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
-            username="$custom_username"
-        fi
-    fi
-    
-    echo "Selected site: $domain (Username: $username, Path: $path)"
-    
-    # Return values through global variables
-    SITE_USERNAME="$username"
-    SITE_PATH="$path"
-    SITE_DOMAIN="$domain"
-    
-    return 0
-}
-
-# Main logic
-
-# Import from legacy .servers file if requested
-if [ -n "$IMPORT" ]; then
-    import_from_legacy "$IMPORT"
-    exit 0
-fi
 
 # Function to import servers from SpinupWP API
 import_from_spinupwp() {
@@ -561,9 +209,14 @@ import_from_spinupwp() {
             done
         fi
         
-        # Add to servers file
-        jq --arg name "$server_name" --arg ip "$server_ip" --arg server_id "$server_id" --arg provider "$provider" --arg ssh_key "$ssh_key" --argjson sites "$sites" \
-           '. += [{"name": $name, "ip": $ip, "user": "root", "port": "22", "id_file": null, "provider": $provider, "server_id": $server_id, "ssh_key": $ssh_key, "sites": $sites}]' \
+        # Add to servers file, using SUDO_USER if defined
+        local user_value="$SUDO_USER"
+        if [ -z "$user_value" ]; then
+            user_value="root"
+        fi
+        
+        jq --arg name "$server_name" --arg ip "$server_ip" --arg server_id "$server_id" --arg provider "$provider" --arg ssh_key "$ssh_key" --argjson sites "$sites" --arg user "$user_value" \
+           '. += [{"name": $name, "ip": $ip, "user": $user, "port": "22", "id_file": null, "provider": $provider, "server_id": $server_id, "ssh_key": $ssh_key, "sites": $sites}]' \
            "$SERVERS_FILE.tmp" > "$SERVERS_FILE.tmp2"
         
         mv "$SERVERS_FILE.tmp2" "$SERVERS_FILE.tmp"
@@ -576,64 +229,691 @@ import_from_spinupwp() {
     echo "Imported $server_count servers from SpinupWP API"
 }
 
-# List all servers if requested
-if [ "$LIST" = true ]; then
+# Function to select a server
+select_server() {
     list_servers
-    exit 0
-fi
-
-# Check if servers file exists and has servers
-check_jq
-ensure_servers_file
-if ! list_servers; then
-    echo "Please add servers using --import or --spinup first."
-    exit 1
-fi
-
-# Select a server
-if ! select_server; then
-    exit 1
-fi
-
-# Set protocol (ssh or sftp)
-PROTOCOL="$DEFAULT_PROTOCOL"
-if [ "$SFTP" = true ]; then
-    PROTOCOL="sftp"
-fi
-
-# Main logic after server selection
-if [ -n "$SPECIFIC_USER" ]; then
-    USER="$SPECIFIC_USER"
-else
-    if [ "$CONNECT_TO_SITE" = true ]; then
-        if select_site "$server_id"; then
-            USER="$SITE_USERNAME"
-        else
-            exit 1
-        fi
-    else
-        USER=$(select_user "$server_id")
+    
+    local count=$(jq 'length' "$SERVERS_FILE")
+    if [ "$count" -eq 0 ]; then
+        echo "No servers configured."
+        return 1
     fi
-fi
+    
+    echo -e "\n${CYAN}Select a server (ID or 'q' to quit):${NC} "
+    read -r server_id
+    
+    if [ "$server_id" = "q" ]; then
+        return 1
+    fi
+    
+    # Validate input
+    if ! [[ "$server_id" =~ ^[0-9]+$ ]] || [ "$server_id" -ge "$count" ]; then
+        echo "Error: Invalid server ID"
+        return 1
+    fi
+    
+    return 0
+}
 
-# Build SSH connection command
-SSH_CMD=$(build_connection_string "$server_id" "$USER" "$PROTOCOL" "$PASSWORD_AUTH")
+# Function to select a user
+select_user() {
+    local server_id="$1"
+    local user=$(jq -r ".[$server_id].user" "$SERVERS_FILE")
+    
+    # If no user specified, use default
+    if [ "$user" = "null" ] || [ -z "$user" ] || [ "$user" = "---" ]; then
+        echo "$DEFAULT_USER"
+        return 0
+    fi
+    
+    # If only one user, use it
+    if [[ ! "$user" =~ "," ]]; then
+        echo "$user"
+        return 0
+    fi
+    
+    # If multiple users, let the user choose
+    echo -e "\n${CYAN}Available users:${NC}"
+    local i=0
+    IFS=',' read -ra USERS <<< "$user"
+    for u in "${USERS[@]}"; do
+        echo "$i. $u"
+        i=$((i + 1))
+    done
+    
+    echo -e "\n${CYAN}Select a user (0-$((i-1))):${NC} "
+    read -r user_id
+    
+    # Validate input
+    if ! [[ "$user_id" =~ ^[0-9]+$ ]] || [ "$user_id" -ge "$i" ]; then
+        echo "Invalid selection, using first user"
+        echo "${USERS[0]}"
+        return 0
+    fi
+    
+    echo "${USERS[$user_id]}"
+    return 0
+}
 
-# Display and copy to clipboard
-echo -e "\n${GREEN}Connection:${NC} $SSH_CMD"
+# Function to list sites on a server
+list_sites() {
+    local server_id="$1"
+    
+    # Get sites for the server
+    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+    local site_count=$(echo "$sites" | jq 'length')
+    
+    if [ "$site_count" -eq 0 ]; then
+        echo "No sites found for this server."
+        return 1
+    fi
+    
+    echo -e "\n${CYAN}Sites on this server:${NC}"
+    echo "---------------------------------------------------------------------------------------------------------"
+    printf "%-4s %-40s %-15s %-40s\n" "ID" "Domain" "Username" "Path"
+    echo "---------------------------------------------------------------------------------------------------------"
+    
+    for i in $(seq 0 $(($site_count - 1))); do
+        local domain=$(echo "$sites" | jq -r ".[$i].domain")
+        local username=$(echo "$sites" | jq -r ".[$i].username")
+        local path=$(echo "$sites" | jq -r ".[$i].path")
+        
+        # Check for custom username in site_users.json
+        if [ -f "$USER_SITES_MAPPING_FILE" ]; then
+            local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
+            local custom_username=$(jq -r --arg server "$server_name" --arg domain "$domain" '.[$server][$domain] // ""' "$USER_SITES_MAPPING_FILE")
+            if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
+                username="$custom_username"
+            fi
+        fi
+        
+        printf "%-4s %-40s %-15s %-40s\n" "$i" "${domain:0:40}" "${username:0:15}" "${path:0:40}"
+    done
+    
+    return 0
+}
 
-# Copy to clipboard if enabled
-if [ "$CLIPBOARD" = true ]; then
-    copy_to_clipboard "$SSH_CMD"
-fi
+# Function to select a site
+select_site() {
+    local server_id="$1"
+    
+    if ! list_sites "$server_id"; then
+        return 1
+    fi
+    
+    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+    local site_count=$(echo "$sites" | jq 'length')
+    
+    echo -e "\n${CYAN}Select a site (ID or 'a' for all, 'q' to quit):${NC} "
+    read -r site_id
+    
+    if [ "$site_id" = "q" ]; then
+        return 1
+    fi
+    
+    if [ "$site_id" = "a" ]; then
+        # Return all sites
+        SITE_ALL=true
+        return 0
+    fi
+    
+    # Validate input
+    if ! [[ "$site_id" =~ ^[0-9]+$ ]] || [ "$site_id" -ge "$site_count" ]; then
+        echo "Error: Invalid site ID"
+        return 1
+    fi
+    
+    # Get site details
+    local domain=$(echo "$sites" | jq -r ".[$site_id].domain")
+    local username=$(echo "$sites" | jq -r ".[$site_id].username")
+    local path=$(echo "$sites" | jq -r ".[$site_id].path")
+    
+    # Check for custom username in site_users.json
+    if [ -f "$USER_SITES_MAPPING_FILE" ]; then
+        local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
+        local custom_username=$(jq -r --arg server "$server_name" --arg domain "$domain" '.[$server][$domain] // ""' "$USER_SITES_MAPPING_FILE")
+        if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
+            username="$custom_username"
+        fi
+    fi
+    
+    echo "Selected site: $domain (Username: $username, Path: $path)"
+    
+    # Return values through global variables
+    SITE_USERNAME="$username"
+    SITE_PATH="$path"
+    SITE_DOMAIN="$domain"
+    SITE_ID="$site_id"
+    SITE_ALL=false
+    
+    return 0
+}
 
-# Connect directly if desired
-echo -e "\n${CYAN}Press Enter to connect or Ctrl+C to exit${NC}"
-read -r
+# Function to build connection string
+build_connection_string() {
+    local server_id="$1"
+    local user="$2"
+    local protocol="$3"
+    
+    local ip=$(jq -r ".[$server_id].ip" "$SERVERS_FILE")
+    local port=$(jq -r ".[$server_id].port // 22" "$SERVERS_FILE")
+    local id_file=$DEFAULT_IDENTITY
+    
+    # Build port string
+    local port_str=""
+    if [ "$port" != "22" ]; then
+        port_str="-p $port "
+    fi
+    
+    # Build identity string
+    local identity_str=""
+    if [ -n "$id_file" ] && [ -f "$id_file" ]; then
+        identity_str="-i $id_file "
+    fi
+    
+    # Build connection string
+    echo "$protocol $identity_str$port_str$user@$ip"
+}
 
-# If connecting to a site, add the path to change to
-if [ "$CONNECT_TO_SITE" = true ] && [ -n "$SITE_PATH" ]; then
-    $SSH_CMD -t "cd $SITE_PATH && bash --login"
-else
-    $SSH_CMD
-fi
+# Function to connect to a server
+connect_to_server() {
+    local server_id="$1"
+    local username="$2"
+    
+    local ssh_cmd=$(build_connection_string "$server_id" "$username" "ssh")
+    
+    echo -e "\n${GREEN}Connecting to server:${NC} $ssh_cmd"
+    echo -e "${YELLOW}Press Ctrl+D to disconnect${NC}\n"
+    
+    $ssh_cmd
+}
+
+# Function to connect to a site
+connect_to_site() {
+    local server_id="$1"
+    local site_id="$2"
+    
+    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+    local domain=$(echo "$sites" | jq -r ".[$site_id].domain")
+    local username=$(echo "$sites" | jq -r ".[$site_id].username")
+    local path=$(echo "$sites" | jq -r ".[$site_id].path")
+    
+    # Check for custom username in site_users.json
+    if [ -f "$USER_SITES_MAPPING_FILE" ]; then
+        local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
+        local custom_username=$(jq -r --arg server "$server_name" --arg domain "$domain" '.[$server][$domain] // ""' "$USER_SITES_MAPPING_FILE")
+        if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
+            username="$custom_username"
+        fi
+    fi
+    
+    local ssh_cmd=$(build_connection_string "$server_id" "$username" "ssh")
+    
+    echo -e "\n${GREEN}Connecting to site:${NC} $domain"
+    echo -e "${GREEN}SSH:${NC} $ssh_cmd"
+    echo -e "${GREEN}Path:${NC} $path"
+    echo -e "${YELLOW}Press Ctrl+D to disconnect${NC}\n"
+    
+    $ssh_cmd -t "cd $path && bash --login"
+}
+
+# Function to detect if a site is a Bedrock site
+is_bedrock_site() {
+    local server_id="$1"
+    local site_id="$2"
+    
+    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+    local domain=$(echo "$sites" | jq -r ".[$site_id].domain")
+    local username=$(echo "$sites" | jq -r ".[$site_id].username")
+    local path=$(echo "$sites" | jq -r ".[$site_id].path")
+    
+    # Check for custom username
+    if [ -f "$USER_SITES_MAPPING_FILE" ]; then
+        local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
+        local custom_username=$(jq -r --arg server "$server_name" --arg domain "$domain" '.[$server][$domain] // ""' "$USER_SITES_MAPPING_FILE")
+        if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
+            username="$custom_username"
+        fi
+    fi
+    
+    # Build SSH command to check for composer.json
+    local ssh_cmd=$(build_connection_string "$server_id" "$username" "ssh")
+    
+    # Run remote command to check if composer.json exists and contains "roots/bedrock"
+    local result=$($ssh_cmd -o "BatchMode=yes" -o "StrictHostKeyChecking=no" -o "ConnectTimeout=5" "cd $path && [ -f composer.json ] && grep -q 'roots/bedrock' composer.json && echo 'YES' || echo 'NO'" 2>/dev/null)
+    
+    if [ "$result" = "YES" ]; then
+        return 0  # True - it is a Bedrock site
+    else
+        return 1  # False - not a Bedrock site
+    fi
+}
+
+# Function to run a command on a site
+run_site_command() {
+    local server_id="$1"
+    local site_id="$2"
+    local command="$3"
+    
+    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+    local domain=$(echo "$sites" | jq -r ".[$site_id].domain")
+    local username=$(echo "$sites" | jq -r ".[$site_id].username")
+    local path=$(echo "$sites" | jq -r ".[$site_id].path")
+    
+    # Check for custom username
+    if [ -f "$USER_SITES_MAPPING_FILE" ]; then
+        local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
+        local custom_username=$(jq -r --arg server "$server_name" --arg domain "$domain" '.[$server][$domain] // ""' "$USER_SITES_MAPPING_FILE")
+        if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
+            username="$custom_username"
+        fi
+    fi
+    
+    local ssh_cmd=$(build_connection_string "$server_id" "$username" "ssh")
+    
+    echo -e "\n${GREEN}Running command on:${NC} $domain"
+    echo -e "${GREEN}Command:${NC} $command"
+    
+    $ssh_cmd -t "cd $path && $command"
+    
+    echo -e "\n${GREEN}Command completed on:${NC} $domain\n"
+    
+    # Sleep briefly to make output more readable when running on multiple sites
+    sleep 1
+}
+
+# Function to show site management menu
+site_management_menu() {
+    local server_id="$1"
+    
+    clear
+    echo -e "${YELLOW}Site Management Menu${NC}"
+    echo -e "1. Connect to a specific site"
+    echo -e "2. Run command on a specific site"
+    echo -e "3. Run command on all Bedrock sites"
+    echo -e "4. Run composer command on all Bedrock sites"
+    echo -e "5. Back to main menu"
+    echo -e "q. Quit"
+    
+    echo -e "\n${CYAN}Select an option:${NC} "
+    read -r option
+    
+    case $option in
+        1)
+            if select_site "$server_id"; then
+                if [ "$SITE_ALL" = "true" ]; then
+                    echo "Cannot connect to all sites at once. Please select a specific site."
+                    sleep 2
+                    site_management_menu "$server_id"
+                else
+                    connect_to_site "$server_id" "$SITE_ID"
+                fi
+            else
+                site_management_menu "$server_id"
+            fi
+            ;;
+        2)
+            if select_site "$server_id"; then
+                echo -e "\n${CYAN}Enter command to run:${NC} "
+                read -r command
+                
+                if [ "$SITE_ALL" = "true" ]; then
+                    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+                    local site_count=$(echo "$sites" | jq 'length')
+                    
+                    for i in $(seq 0 $(($site_count - 1))); do
+                        run_site_command "$server_id" "$i" "$command"
+                    done
+                else
+                    run_site_command "$server_id" "$SITE_ID" "$command"
+                fi
+            fi
+            ;;
+        3)
+            echo -e "\n${CYAN}Enter command to run on all Bedrock sites:${NC} "
+            read -r command
+            
+            local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+            local site_count=$(echo "$sites" | jq 'length')
+            local bedrock_found=false
+            
+            echo -e "\n${YELLOW}Detecting Bedrock sites...${NC}"
+            
+            for i in $(seq 0 $(($site_count - 1))); do
+                local domain=$(echo "$sites" | jq -r ".[$i].domain")
+                echo -n "Checking $domain... "
+                
+                if is_bedrock_site "$server_id" "$i"; then
+                    echo -e "${GREEN}Bedrock site!${NC}"
+                    bedrock_found=true
+                    run_site_command "$server_id" "$i" "$command"
+                else
+                    echo -e "${RED}Not a Bedrock site${NC}"
+                fi
+            done
+            
+            if [ "$bedrock_found" = "false" ]; then
+                echo -e "\n${RED}No Bedrock sites found on this server.${NC}"
+            fi
+            ;;
+        4)
+            echo -e "\n${CYAN}Select composer command:${NC}"
+            select composer_cmd in "${COMPOSER_COMMANDS[@]}" "custom"; do
+                if [ "$composer_cmd" = "custom" ]; then
+                    echo -e "${CYAN}Enter custom composer command:${NC} "
+                    read -r custom_cmd
+                    composer_cmd="$custom_cmd"
+                fi
+                
+                local command="composer $composer_cmd"
+                
+                local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+                local site_count=$(echo "$sites" | jq 'length')
+                local bedrock_found=false
+                
+                echo -e "\n${YELLOW}Running '$command' on Bedrock sites...${NC}"
+                
+                for i in $(seq 0 $(($site_count - 1))); do
+                    local domain=$(echo "$sites" | jq -r ".[$i].domain")
+                    echo -n "Checking $domain... "
+                    
+                    if is_bedrock_site "$server_id" "$i"; then
+                        echo -e "${GREEN}Bedrock site!${NC}"
+                        bedrock_found=true
+                        run_site_command "$server_id" "$i" "$command"
+                    else
+                        echo -e "${RED}Not a Bedrock site${NC}"
+                    fi
+                done
+                
+                if [ "$bedrock_found" = "false" ]; then
+                    echo -e "\n${RED}No Bedrock sites found on this server.${NC}"
+                fi
+                
+                break
+            done
+            ;;
+        5)
+            main_menu
+            ;;
+        q)
+            echo "Goodbye!"
+            exit 0
+            ;;
+        *)
+            echo "Invalid option. Please try again."
+            sleep 1
+            site_management_menu "$server_id"
+            ;;
+    esac
+}
+
+# Function for server management menu
+server_management_menu() {
+    local server_id="$1"
+    local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
+    local server_user=$(jq -r ".[$server_id].user" "$SERVERS_FILE")
+    
+    if [ -z "$server_user" ] || [ "$server_user" = "null" ]; then
+        server_user="$SUDO_USER"
+        if [ -z "$server_user" ]; then
+            server_user="root"
+        fi
+    fi
+    
+    clear
+    echo -e "${YELLOW}Managing Server:${NC} $server_name"
+    echo -e "${YELLOW}Default User:${NC} $server_user"
+    echo
+    echo -e "1. Connect as sudo user"
+    echo -e "2. Manage sites"
+    echo -e "3. Back to main menu"
+    echo -e "q. Quit"
+    
+    echo -e "\n${CYAN}Select an option:${NC} "
+    read -r option
+    
+    case $option in
+        1)
+            connect_to_server "$server_id" "$server_user"
+            server_management_menu "$server_id"
+            ;;
+        2)
+            site_management_menu "$server_id"
+            server_management_menu "$server_id"
+            ;;
+        3)
+            main_menu
+            ;;
+        q)
+            echo "Goodbye!"
+            exit 0
+            ;;
+        *)
+            echo "Invalid option. Please try again."
+            sleep 1
+            server_management_menu "$server_id"
+            ;;
+    esac
+}
+
+# Main menu function
+main_menu() {
+    clear
+    echo -e "${YELLOW}SSH Connect - Interactive Menu${NC}"
+    echo -e "1. Select server to manage"
+    echo -e "2. Import/update servers from SpinupWP"
+    echo -e "3. List all servers"
+    echo -e "q. Quit"
+    
+    echo -e "\n${CYAN}Select an option:${NC} "
+    read -r option
+    
+    case $option in
+        1)
+            if select_server; then
+                server_management_menu "$server_id"
+            else
+                main_menu
+            fi
+            ;;
+        2)
+            import_from_spinupwp
+            echo -e "\n${CYAN}Press any key to continue...${NC}"
+            read -n 1
+            main_menu
+            ;;
+        3)
+            list_servers
+            echo -e "\n${CYAN}Press any key to continue...${NC}"
+            read -n 1
+            main_menu
+            ;;
+        q)
+            echo "Goodbye!"
+            exit 0
+            ;;
+        *)
+            echo "Invalid option. Please try again."
+            sleep 1
+            main_menu
+            ;;
+    esac
+}
+
+# Initialize configuration
+init_config
+
+# Process command-line options
+while (( "$#" )); do
+    case "$1" in
+        -h|--help)
+            echo "SSH Connect - Interactive SSH connection manager"
+            echo "Version: $VERSION"
+            echo
+            echo "USAGE:"
+            echo "  ssh-connect [options]"
+            echo
+            echo "OPTIONS:"
+            echo "  -h, --help              Display this help"
+            echo "  -v, --version           Display version information"
+            echo "  -i, --import            Import servers from SpinupWP"
+            echo "  -s, --server ID         Connect directly to server ID"
+            echo "  -a, --all-sites CMD     Run command on all Bedrock sites"
+            echo "  -c, --composer CMD      Run composer command on all Bedrock sites"
+            echo
+            echo "EXAMPLES:"
+            echo "  ssh-connect             Start interactive menu"
+            echo "  ssh-connect --import    Import servers from SpinupWP"
+            echo "  ssh-connect -s 1        Connect to server with ID 1"
+            echo "  ssh-connect -a 'wp plugin update --all' -s 2   Update plugins on all sites on server 2"
+            exit 0
+            ;;
+        -v|--version)
+            echo "SSH Connect - Version $VERSION"
+            exit 0
+            ;;
+        -i|--import)
+            import_from_spinupwp
+            exit 0
+            ;;
+        -s|--server)
+            if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                server_id="$2"
+                # Make sure server exists
+                ensure_servers_file
+                local count=$(jq 'length' "$SERVERS_FILE")
+                if [ "$server_id" -ge "$count" ]; then
+                    echo "Error: Server ID $server_id not found."
+                    exit 1
+                fi
+                shift 2
+                server_management_menu "$server_id"
+                exit 0
+            else
+                echo "Error: Server ID required"
+                exit 1
+            fi
+            ;;
+        -a|--all-sites)
+            if [ -n "$2" ]; then
+                COMMAND="$2"
+                shift 2
+                # Need a server ID
+                if [ -z "$server_id" ]; then
+                    # Try to get from remaining args
+                    if [ "$1" = "-s" ] || [ "$1" = "--server" ]; then
+                        if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                            server_id="$2"
+                            # Make sure server exists
+                            ensure_servers_file
+                            local count=$(jq 'length' "$SERVERS_FILE")
+                            if [ "$server_id" -ge "$count" ]; then
+                                echo "Error: Server ID $server_id not found."
+                                exit 1
+                            fi
+                        else
+                            echo "Error: Server ID required"
+                            exit 1
+                        fi
+                    else
+                        echo "Error: Server ID required. Use -s ID or --server ID."
+                        exit 1
+                    fi
+                fi
+                
+                # Run command on all Bedrock sites
+                local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+                local site_count=$(echo "$sites" | jq 'length')
+                local bedrock_found=false
+                
+                echo -e "\n${YELLOW}Running command on Bedrock sites...${NC}"
+                
+                for i in $(seq 0 $(($site_count - 1))); do
+                    local domain=$(echo "$sites" | jq -r ".[$i].domain")
+                    echo -n "Checking $domain... "
+                    
+                    if is_bedrock_site "$server_id" "$i"; then
+                        echo -e "${GREEN}Bedrock site!${NC}"
+                        bedrock_found=true
+                        run_site_command "$server_id" "$i" "$COMMAND"
+                    else
+                        echo -e "${RED}Not a Bedrock site${NC}"
+                    fi
+                done
+                
+                if [ "$bedrock_found" = "false" ]; then
+                    echo -e "\n${RED}No Bedrock sites found on this server.${NC}"
+                fi
+                exit 0
+            else
+                echo "Error: Command required"
+                exit 1
+            fi
+            ;;
+        -c|--composer)
+            if [ -n "$2" ]; then
+                COMMAND="composer $2"
+                shift 2
+                # Need a server ID
+                if [ -z "$server_id" ]; then
+                    # Try to get from remaining args
+                    if [ "$1" = "-s" ] || [ "$1" = "--server" ]; then
+                        if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                            server_id="$2"
+                            # Make sure server exists
+                            ensure_servers_file
+                            local count=$(jq 'length' "$SERVERS_FILE")
+                            if [ "$server_id" -ge "$count" ]; then
+                                echo "Error: Server ID $server_id not found."
+                                exit 1
+                            fi
+                        else
+                            echo "Error: Server ID required"
+                            exit 1
+                        fi
+                    else
+                        echo "Error: Server ID required. Use -s ID or --server ID."
+                        exit 1
+                    fi
+                fi
+                
+                # Run composer command on all Bedrock sites
+                local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+                local site_count=$(echo "$sites" | jq 'length')
+                local bedrock_found=false
+                
+                echo -e "\n${YELLOW}Running composer command on Bedrock sites...${NC}"
+                
+                for i in $(seq 0 $(($site_count - 1))); do
+                    local domain=$(echo "$sites" | jq -r ".[$i].domain")
+                    echo -n "Checking $domain... "
+                    
+                    if is_bedrock_site "$server_id" "$i"; then
+                        echo -e "${GREEN}Bedrock site!${NC}"
+                        bedrock_found=true
+                        run_site_command "$server_id" "$i" "$COMMAND"
+                    else
+                        echo -e "${RED}Not a Bedrock site${NC}"
+                    fi
+                done
+                
+                if [ "$bedrock_found" = "false" ]; then
+                    echo -e "\n${RED}No Bedrock sites found on this server.${NC}"
+                fi
+                exit 0
+            else
+                echo "Error: Composer command required"
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Run 'ssh-connect --help' for usage information."
+            exit 1
+            ;;
+    esac
+done
+
+# Start interactive menu by default
+main_menu
