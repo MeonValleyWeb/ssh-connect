@@ -258,8 +258,8 @@ import_from_spinupwp() {
     
     echo "Fetching servers from SpinupWP API..."
     
-    # Make API request - note the correct API URL format
-    local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/api/v1/servers")
+    # Make API request with the correct API URL
+    local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://spinupwp.app/api/sites")
     
     # Check for errors
     if ! echo "$response" | jq -e '.data' > /dev/null; then
@@ -268,19 +268,19 @@ import_from_spinupwp() {
         exit 1
     fi
     
-    # Process response
+    # Process response for sites data
     echo "[]" > "$SERVERS_FILE.tmp"
     
     local count=$(echo "$response" | jq '.data | length')
     for i in $(seq 0 $(($count - 1))); do
-        local name=$(echo "$response" | jq -r ".data[$i].name")
-        local ip=$(echo "$response" | jq -r ".data[$i].ip_address")
-        local provider=$(echo "$response" | jq -r ".data[$i].provider")
-        local spinupwp_id=$(echo "$response" | jq -r ".data[$i].id")
+        local site_name=$(echo "$response" | jq -r ".data[$i].domain")
+        local server_ip=$(echo "$response" | jq -r ".data[$i].server.ip_address")
+        local server_name=$(echo "$response" | jq -r ".data[$i].server.name")
+        local site_id=$(echo "$response" | jq -r ".data[$i].id")
         
         # Add to servers file
-        jq --arg name "$name" --arg ip "$ip" --arg provider "$provider" --arg spinupwp_id "$spinupwp_id" \
-           '. += [{"name": $name, "ip": $ip, "user": "root", "port": "22", "id_file": null, "provider": $provider, "spinupwp_id": $spinupwp_id}]' \
+        jq --arg name "$site_name" --arg ip "$server_ip" --arg server_name "$server_name" --arg site_id "$site_id" \
+           '. += [{"name": $name, "ip": $ip, "user": "root", "port": "22", "id_file": null, "server_name": $server_name, "site_id": $site_id}]' \
            "$SERVERS_FILE.tmp" > "$SERVERS_FILE.tmp2"
         
         mv "$SERVERS_FILE.tmp2" "$SERVERS_FILE.tmp"
