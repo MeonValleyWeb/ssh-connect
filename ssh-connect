@@ -256,11 +256,8 @@ import_from_spinupwp() {
         exit 1
     fi
     
-    # Debug information
-    echo "Making API request to: https://api.spinupwp.app/v1/servers"
-    echo "Response status: $(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.app/v1/servers")"
-    
-    # Make API request using the official documented URL
+    # Make API request using the correct URL as confirmed by testing
+    echo "Fetching servers from SpinupWP API..."
     local response=$(curl -s -H "Authorization: Bearer $SPINUPWP_API_TOKEN" -H "Accept: application/json" "https://api.spinupwp.app/v1/servers")
     
     # Check for errors
