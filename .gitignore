@@ -8,6 +8,7 @@ add-all-sites.sh
 add-sites.sh
 spinupwp-debug.sh
 test-*.sh
+ssh-connect-complete
 
 # Local configuration
 .ssh-connect/
