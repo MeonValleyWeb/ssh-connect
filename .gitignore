@@ -1,7 +1,22 @@
-# Test Files
-add-all-sites.sh
-add-sites.sh
-debug-bedrock.sh
-install.sh
-spinupwp-debug.sh
+# SSH Connect .gitignore
+
+# Testing and debug files
+debug-*.sh
+*-test.sh
 bedrock-test.sh
+add-all-sites.sh
+test-*.sh
+
+# Local configuration
+.ssh-connect/
+~/.ssh-connect/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db
