@@ -477,16 +477,35 @@ is_bedrock_site() {
     fi
     
     # Build SSH command to check for composer.json
-    local ssh_cmd=$(build_connection_string "$server_id" "$username" "ssh")
+    local ip=$(jq -r ".[$server_id].ip" "$SERVERS_FILE")
     
-    # Run remote command to check if composer.json exists and contains "roots/bedrock"
-    local result=$($ssh_cmd -o "BatchMode=yes" -o "StrictHostKeyChecking=no" -o "ConnectTimeout=5" "cd $path && [ -f composer.json ] && grep -q 'roots/bedrock' composer.json && echo 'YES' || echo 'NO'" 2>/dev/null)
+    # First try: Check for composer.json with roots/bedrock
+    echo -e "\n${YELLOW}Checking if $domain is a Bedrock site...${NC}"
+    echo -e "${BLUE}Testing path: $path ${NC}"
     
-    if [ "$result" = "YES" ]; then
+    # Use a more reliable method to check for Bedrock structure
+    # We'll check for multiple indicators of Bedrock
+    local check_cmd="cd $path && "
+    check_cmd+="(test -f composer.json && grep -q 'roots/bedrock' composer.json && echo 'COMPOSER_BEDROCK:YES' || echo 'COMPOSER_BEDROCK:NO') && "
+    check_cmd+="(test -d web/wp && echo 'WEB_WP:YES' || echo 'WEB_WP:NO') && "
+    check_cmd+="(test -d web/app && echo 'WEB_APP:YES' || echo 'WEB_APP:NO') && "
+    check_cmd+="(test -f .env && echo 'ENV:YES' || echo 'ENV:NO')"
+    
+    # Run the command to check for Bedrock indicators
+    local ssh_cmd="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 $username@$ip"
+    local result=$($ssh_cmd "$check_cmd" 2>/dev/null)
+    
+    echo -e "${BLUE}Detection results:${NC} $result"
+    
+    # Check if any of the Bedrock indicators is positive
+    if echo "$result" | grep -q "YES"; then
+        echo -e "${GREEN}✓ Bedrock detected by structure check${NC}"
         return 0  # True - it is a Bedrock site
-    else
-        return 1  # False - not a Bedrock site
     fi
+    
+    # If we get here, no Bedrock indicators were found
+    echo -e "${RED}✗ Not a Bedrock site${NC}"
+    return 1  # False - not a Bedrock site
 }
 
 # Function to run a command on a site
