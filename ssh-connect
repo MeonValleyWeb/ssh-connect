@@ -5,7 +5,7 @@
 #
 
 # Constants
-VERSION="1.0.1"
+VERSION="1.0.2"
 CONFIG_DIR="$HOME/.ssh-connect"
 SERVERS_FILE="$CONFIG_DIR/servers.json"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -28,7 +28,6 @@ DEFAULT_IDENTITY="$HOME/.ssh/id_rsa"
 DEFAULT_PROTOCOL="ssh"
 SUDO_USER="" # Will be loaded from config
 COMPOSER_COMMANDS=("update" "install" "dump-autoload" "require" "remove")
-BEDROCK_PATHS=("web/wp" "wp" "app/uploads" "app/plugins")
 
 # Create/load configuration files
 init_config() {
@@ -392,55 +391,6 @@ select_site() {
     return 0
 }
 
-# Function to detect if a site is a Bedrock site
-is_bedrock_site() {
-    local server_id="$1"
-    local site_id="$2"
-    
-    local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
-    local domain=$(echo "$sites" | jq -r ".[$site_id].domain")
-    local username=$(echo "$sites" | jq -r ".[$site_id].username")
-    local path=$(echo "$sites" | jq -r ".[$site_id].path")
-    local ip=$(jq -r ".[$server_id].ip" "$SERVERS_FILE")
-    
-    # Check for custom username
-    if [ -f "$USER_SITES_MAPPING_FILE" ]; then
-        local server_name=$(jq -r ".[$server_id].name" "$SERVERS_FILE")
-        local custom_username=$(jq -r --arg server "$server_name" --arg domain "$domain" '.[$server][$domain] // ""' "$USER_SITES_MAPPING_FILE")
-        if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
-            username="$custom_username"
-        fi
-    fi
-    
-    echo -e "\n${YELLOW}Checking if $domain is a Bedrock site...${NC}"
-    echo -e "${BLUE}Testing path: $path ${NC}"
-    
-    # For SpinupWP sites, the Bedrock files are directly in the /sites/domain/files directory
-    local check_cmd="cd $path 2>/dev/null && "
-    check_cmd+="(test -f composer.json && echo 'COMPOSER:YES' || echo 'COMPOSER:NO') && "
-    check_cmd+="(test -f composer.json && grep -q 'roots/bedrock' composer.json && echo 'BEDROCK:YES' || echo 'BEDROCK:NO') && "
-    check_cmd+="(test -d web/wp && echo 'WEB_WP:YES' || echo 'WEB_WP:NO') && "
-    check_cmd+="(test -f .env && echo 'ENV:YES' || echo 'ENV:NO')"
-    
-    # Run SSH command without batch mode to allow for passphrase prompt
-    local ssh_cmd="ssh -i $DEFAULT_IDENTITY -o StrictHostKeyChecking=no -o ConnectTimeout=5"
-    local result=$($ssh_cmd "$username@$ip" "$check_cmd" 2>/dev/null)
-    
-    echo -e "${BLUE}Detection results:${NC} $result"
-    
-    # Check if any Bedrock indicators were found
-    if echo "$result" | grep -q "YES"; then
-        # We only need one positive result to consider it a Bedrock site
-        if echo "$result" | grep -q "BEDROCK:YES" || (echo "$result" | grep -q "WEB_WP:YES" && echo "$result" | grep -q "COMPOSER:YES"); then
-            echo -e "${GREEN}✓ Bedrock site detected${NC}"
-            return 0  # True - it is a Bedrock site
-        fi
-    fi
-    
-    echo -e "${RED}✗ Not a Bedrock site${NC}"
-    return 1  # False - not a Bedrock site
-}
-
 # Function to build connection string
 build_connection_string() {
     local server_id="$1"
@@ -535,7 +485,7 @@ run_site_command() {
     echo -e "${GREEN}Command:${NC} $command"
     
     # For SpinupWP sites, we work directly in the /sites/domain/files directory
-    ssh -i "$DEFAULT_IDENTITY" -t "$username@$ip" "cd $path && $command"
+    ssh -t "$username@$ip" "cd $path && $command"
     
     echo -e "\n${GREEN}Command completed on:${NC} $domain\n"
     
@@ -558,8 +508,8 @@ site_management_menu() {
     echo -e "${YELLOW}Site Management Menu${NC}"
     echo -e "1. Connect to a specific site"
     echo -e "2. Run command on a specific site"
-    echo -e "3. Run command on all Bedrock sites"
-    echo -e "4. Run composer command on all Bedrock sites"
+    echo -e "3. Run command on all sites"
+    echo -e "4. Run composer command on all sites"
     echo -e "5. Back to main menu"
     echo -e "q. Quit"
     
@@ -598,31 +548,19 @@ site_management_menu() {
             fi
             ;;
         3)
-            echo -e "\n${CYAN}Enter command to run on all Bedrock sites:${NC} "
+            echo -e "\n${CYAN}Enter command to run on all sites:${NC} "
             read -r command
             
             local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
             local site_count=$(echo "$sites" | jq 'length')
-            local bedrock_found=false
             
-            echo -e "\n${YELLOW}Detecting Bedrock sites...${NC}"
+            echo -e "\n${YELLOW}Running command on all sites...${NC}"
             
             for i in $(seq 0 $(($site_count - 1))); do
                 local domain=$(echo "$sites" | jq -r ".[$i].domain")
-                echo -n "Checking $domain... "
-                
-                if is_bedrock_site "$server_id" "$i"; then
-                    echo -e "${GREEN}Bedrock site!${NC}"
-                    bedrock_found=true
-                    run_site_command "$server_id" "$i" "$command"
-                else
-                    echo -e "${RED}Not a Bedrock site${NC}"
-                fi
+                echo -e "Processing site: $domain"
+                run_site_command "$server_id" "$i" "$command"
             done
-            
-            if [ "$bedrock_found" = "false" ]; then
-                echo -e "\n${RED}No Bedrock sites found on this server.${NC}"
-            fi
             ;;
         4)
             echo -e "\n${CYAN}Select composer command:${NC}"
@@ -637,26 +575,14 @@ site_management_menu() {
                 
                 local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
                 local site_count=$(echo "$sites" | jq 'length')
-                local bedrock_found=false
                 
-                echo -e "\n${YELLOW}Running '$command' on Bedrock sites...${NC}"
+                echo -e "\n${YELLOW}Running '$command' on all sites...${NC}"
                 
                 for i in $(seq 0 $(($site_count - 1))); do
                     local domain=$(echo "$sites" | jq -r ".[$i].domain")
-                    echo -n "Checking $domain... "
-                    
-                    if is_bedrock_site "$server_id" "$i"; then
-                        echo -e "${GREEN}Bedrock site!${NC}"
-                        bedrock_found=true
-                        run_site_command "$server_id" "$i" "$command"
-                    else
-                        echo -e "${RED}Not a Bedrock site${NC}"
-                    fi
+                    echo -e "Processing site: $domain"
+                    run_site_command "$server_id" "$i" "$command"
                 done
-                
-                if [ "$bedrock_found" = "false" ]; then
-                    echo -e "\n${RED}No Bedrock sites found on this server.${NC}"
-                fi
                 
                 break
             done
@@ -718,3 +644,162 @@ server_management_menu() {
             exit 0
             ;;
         *)
+            echo "Invalid option. Please try again."
+            sleep 1
+            server_management_menu "$server_id"
+            ;;
+    esac
+}
+
+# Main menu function
+main_menu() {
+    clear
+    echo -e "${YELLOW}SSH Connect - Interactive Menu${NC}"
+    echo -e "1. Select server to manage"
+    echo -e "2. Import/update servers from SpinupWP"
+    echo -e "3. List all servers"
+    echo -e "q. Quit"
+    
+    echo -e "\n${CYAN}Select an option:${NC} "
+    read -r option
+    
+    case $option in
+        1)
+            if select_server; then
+                server_management_menu "$server_id"
+            else
+                main_menu
+            fi
+            ;;
+        2)
+            import_from_spinupwp
+            echo -e "\n${CYAN}Press any key to continue...${NC}"
+            read -n 1
+            main_menu
+            ;;
+        3)
+            list_servers
+            echo -e "\n${CYAN}Press any key to continue...${NC}"
+            read -n 1
+            main_menu
+            ;;
+        q)
+            echo "Goodbye!"
+            exit 0
+            ;;
+        *)
+            echo "Invalid option. Please try again."
+            sleep 1
+            main_menu
+            ;;
+    esac
+}
+
+# Initialize configuration
+init_config
+
+# Process command-line options
+while (( "$#" )); do
+    case "$1" in
+        -h|--help)
+            echo "SSH Connect - Interactive SSH connection manager"
+            echo "Version: $VERSION"
+            echo
+            echo "USAGE:"
+            echo "  ssh-connect [options]"
+            echo
+            echo "OPTIONS:"
+            echo "  -h, --help              Display this help"
+            echo "  -v, --version           Display version information"
+            echo "  -i, --import            Import servers from SpinupWP"
+            echo "  -s, --server ID         Connect directly to server ID"
+            echo "  -a, --all-sites CMD     Run command on all sites"
+            echo "  -c, --composer CMD      Run composer command on all sites"
+            echo
+            echo "EXAMPLES:"
+            echo "  ssh-connect             Start interactive menu"
+            echo "  ssh-connect --import    Import servers from SpinupWP"
+            echo "  ssh-connect -s 1        Connect to server with ID 1"
+            echo "  ssh-connect -a 'wp plugin update --all' -s 2   Update plugins on all sites on server 2"
+            exit 0
+            ;;
+        -v|--version)
+            echo "SSH Connect - Version $VERSION"
+            exit 0
+            ;;
+        -i|--import)
+            import_from_spinupwp
+            exit 0
+            ;;
+        -s|--server)
+            if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                server_id="$2"
+                # Make sure server exists
+                ensure_servers_file
+                local count=$(jq 'length' "$SERVERS_FILE")
+                if [ "$server_id" -ge "$count" ]; then
+                    echo "Error: Server ID $server_id not found."
+                    exit 1
+                fi
+                shift 2
+                server_management_menu "$server_id"
+                exit 0
+            else
+                echo "Error: Server ID required"
+                exit 1
+            fi
+            ;;
+        -a|--all-sites)
+            if [ -n "$2" ]; then
+                COMMAND="$2"
+                shift 2
+                # Need a server ID
+                if [ -z "$server_id" ]; then
+                    # Try to get from remaining args
+                    if [ "$1" = "-s" ] || [ "$1" = "--server" ]; then
+                        if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                            server_id="$2"
+                            # Make sure server exists
+                            ensure_servers_file
+                            local count=$(jq 'length' "$SERVERS_FILE")
+                            if [ "$server_id" -ge "$count" ]; then
+                                echo "Error: Server ID $server_id not found."
+                                exit 1
+                            fi
+                        else
+                            echo "Error: Server ID required"
+                            exit 1
+                        fi
+                    else
+                        echo "Error: Server ID required. Use -s ID or --server ID."
+                        exit 1
+                    fi
+                fi
+                
+                # Run composer command on all sites
+                local sites=$(jq -r ".[$server_id].sites" "$SERVERS_FILE")
+                local site_count=$(echo "$sites" | jq 'length')
+                
+                echo -e "\n${YELLOW}Running composer command on all sites...${NC}"
+                
+                for i in $(seq 0 $(($site_count - 1))); do
+                    local domain=$(echo "$sites" | jq -r ".[$i].domain")
+                    echo -e "Processing site: $domain"
+                    run_site_command "$server_id" "$i" "$COMMAND"
+                done
+                exit 0
+            else
+                echo "Error: Composer command required"
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Run 'ssh-connect --help' for usage information."
+            exit 1
+            ;;
+    esac
+done
+
+# Start interactive menu by default
+main_menu
