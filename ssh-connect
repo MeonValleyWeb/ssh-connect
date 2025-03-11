@@ -40,6 +40,27 @@ init_config() {
     # Create default config if it doesn't exist
     if [ ! -f "$CONFIG_FILE" ]; then
         cat > "$CONFIG_FILE" << EOF
+
+# Function to ensure SSH agent is running and has the key loaded
+ensure_ssh_agent() {
+    # Only proceed if USE_SSH_AGENT is enabled
+    if [ "$USE_SSH_AGENT" != "true" ]; then
+        return
+    fi
+    
+    # Check if SSH agent is running
+    if [ -z "$SSH_AUTH_SOCK" ]; then
+        echo -e "${YELLOW}Starting SSH agent...${NC}"
+        eval $(ssh-agent -s)
+    fi
+    
+    # Check if the key is loaded
+    if ! ssh-add -l | grep -q "$DEFAULT_IDENTITY"; then
+        echo -e "${YELLOW}Adding SSH key to agent...${NC}"
+        ssh-add "$DEFAULT_IDENTITY"
+    fi
+}
+
 # SSH Connect Configuration
 
 # Default SSH user
