@@ -475,60 +475,33 @@ is_bedrock_site() {
         if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
             username="$custom_username"
         fi
-    }
-    
-    # Build SSH command with proper identity file
-    local ssh_cmd="ssh -i $DEFAULT_IDENTITY -o StrictHostKeyChecking=no -o ConnectTimeout=5"
+    fi
     
     echo -e "\n${YELLOW}Checking if $domain is a Bedrock site...${NC}"
+    echo -e "${BLUE}Testing path: $path ${NC}"
     
-    # Try a better path for Bedrock structure - one directory up from 'files'
-    local base_path="${path%/files}"
-    echo -e "${BLUE}Testing path: $base_path ${NC}"
-    
-    # Check for Bedrock indicators
-    local check_cmd="cd $base_path 2>/dev/null && "
+    # For SpinupWP sites, the Bedrock files are directly in the /sites/domain/files directory
+    local check_cmd="cd $path 2>/dev/null && "
     check_cmd+="(test -f composer.json && echo 'COMPOSER:YES' || echo 'COMPOSER:NO') && "
+    check_cmd+="(test -f composer.json && grep -q 'roots/bedrock' composer.json && echo 'BEDROCK:YES' || echo 'BEDROCK:NO') && "
     check_cmd+="(test -d web/wp && echo 'WEB_WP:YES' || echo 'WEB_WP:NO') && "
     check_cmd+="(test -f .env && echo 'ENV:YES' || echo 'ENV:NO')"
     
-    # Run the command
+    # Run SSH command without batch mode to allow for passphrase prompt
+    local ssh_cmd="ssh -i $DEFAULT_IDENTITY -o StrictHostKeyChecking=no -o ConnectTimeout=5"
     local result=$($ssh_cmd "$username@$ip" "$check_cmd" 2>/dev/null)
     
-    # If we get any positive results, consider it a Bedrock site
+    echo -e "${BLUE}Detection results:${NC} $result"
+    
+    # Check if any Bedrock indicators were found
     if echo "$result" | grep -q "YES"; then
-        echo -e "${GREEN}✓ Bedrock detected!${NC}"
-        return 0  # True - it is a Bedrock site
+        # We only need one positive result to consider it a Bedrock site
+        if echo "$result" | grep -q "BEDROCK:YES" || (echo "$result" | grep -q "WEB_WP:YES" && echo "$result" | grep -q "COMPOSER:YES"); then
+            echo -e "${GREEN}✓ Bedrock site detected${NC}"
+            return 0  # True - it is a Bedrock site
+        fi
     fi
     
-    # Try the actual path as a fallback
-    echo -e "${BLUE}Testing alternate path: $path ${NC}"
-    check_cmd="cd $path 2>/dev/null && "
-    check_cmd+="(test -f ../composer.json && echo 'COMPOSER:YES' || echo 'COMPOSER:NO') && "
-    check_cmd+="(test -d ../web/wp && echo 'WEB_WP:YES' || echo 'WEB_WP:NO') && "
-    check_cmd+="(test -f ../.env && echo 'ENV:YES' || echo 'ENV:NO')"
-    
-    result=$($ssh_cmd "$username@$ip" "$check_cmd" 2>/dev/null)
-    
-    # Check results again
-    if echo "$result" | grep -q "YES"; then
-        echo -e "${GREEN}✓ Bedrock detected!${NC}"
-        return 0  # True - it is a Bedrock site
-    fi
-    
-    # One more try - check if this is a non-standard Bedrock setup
-    echo -e "${BLUE}Testing for non-standard Bedrock...${NC}"
-    check_cmd="cd $path 2>/dev/null && "
-    check_cmd+="(find .. -name composer.json -maxdepth 2 -type f | grep -q composer.json && echo 'COMPOSER_FOUND:YES' || echo 'COMPOSER_FOUND:NO')"
-    
-    result=$($ssh_cmd "$username@$ip" "$check_cmd" 2>/dev/null)
-    
-    if echo "$result" | grep -q "YES"; then
-        echo -e "${GREEN}✓ Potential Bedrock detected!${NC}"
-        return 0  # True - it might be a Bedrock site
-    }
-    
-    # If we get here, no Bedrock indicators were found
     echo -e "${RED}✗ Not a Bedrock site${NC}"
     return 1  # False - not a Bedrock site
 }
@@ -552,24 +525,13 @@ run_site_command() {
         if [ -n "$custom_username" ] && [ "$custom_username" != "null" ]; then
             username="$custom_username"
         fi
-    }
-    
-    local ssh_cmd="ssh -i $DEFAULT_IDENTITY"
+    fi
     
     echo -e "\n${GREEN}Running command on:${NC} $domain"
     echo -e "${GREEN}Command:${NC} $command"
     
-    # First check if this is a Bedrock site to determine the right path for composer
-    local base_path="${path%/files}"
-    local cmd_path="$path"
-    
-    # Check if the composer.json is one level up
-    if $ssh_cmd -o BatchMode=yes "$username@$ip" "test -f $base_path/composer.json" 2>/dev/null; then
-        cmd_path="$base_path"
-    fi
-    
-    # Now run the actual command
-    $ssh_cmd -t "$username@$ip" "cd $cmd_path && $command"
+    # For SpinupWP sites, we work directly in the /sites/domain/files directory
+    ssh -i "$DEFAULT_IDENTITY" -t "$username@$ip" "cd $path && $command"
     
     echo -e "\n${GREEN}Command completed on:${NC} $domain\n"
     
