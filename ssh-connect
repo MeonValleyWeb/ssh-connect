@@ -43,22 +43,70 @@ init_config() {
 
 # Function to ensure SSH agent is running and has the key loaded
 ensure_ssh_agent() {
-    # Only proceed if USE_SSH_AGENT is enabled
+    # Skip if SSH agent is disabled in config
     if [ "$USE_SSH_AGENT" != "true" ]; then
-        return
+        return 0
     fi
     
     # Check if SSH agent is running
-    if [ -z "$SSH_AUTH_SOCK" ]; then
+    if [ -z "$SSH_AUTH_SOCK" ] || [ -z "$SSH_AGENT_PID" ]; then
         echo -e "${YELLOW}Starting SSH agent...${NC}"
-        eval $(ssh-agent -s)
+        eval $(ssh-agent) > /dev/null
+        
+        # Verify agent started
+        if [ -z "$SSH_AUTH_SOCK" ] || [ -z "$SSH_AGENT_PID" ]; then
+            echo -e "${RED}Failed to start SSH agent. Continuing without it.${NC}"
+            return 1
+        fi
     fi
     
-    # Check if the key is loaded
-    if ! ssh-add -l | grep -q "$DEFAULT_IDENTITY"; then
+    # Check if any keys are loaded in the agent
+    if ssh-add -l &>/dev/null; then
+        echo -e "${GREEN}SSH agent is running with keys loaded${NC}"
+    else
+        # No keys loaded, add the default identity
         echo -e "${YELLOW}Adding SSH key to agent...${NC}"
-        ssh-add "$DEFAULT_IDENTITY"
+        if [ -f "$DEFAULT_IDENTITY" ]; then
+            ssh-add "$DEFAULT_IDENTITY"
+        else
+            echo -e "${RED}Identity file $DEFAULT_IDENTITY not found${NC}"
+            return 1
+        fi
     fi
+    
+    return 0
+}
+
+# Modified build_connection_string function to use agent forwarding
+build_connection_string() {
+    local server_id="$1"
+    local user="$2"
+    local protocol="$3"
+    
+    local ip=$(jq -r ".[$server_id].ip" "$SERVERS_FILE")
+    local port=$(jq -r ".[$server_id].port // 22" "$SERVERS_FILE")
+    local id_file=$DEFAULT_IDENTITY
+    
+    # Build port string
+    local port_str=""
+    if [ "$port" != "22" ]; then
+        port_str="-p $port "
+    fi
+    
+    # Build identity string
+    local identity_str=""
+    if [ -n "$id_file" ] && [ -f "$id_file" ]; then
+        identity_str="-i $id_file "
+    fi
+    
+    # Add agent forwarding if enabled
+    local agent_str=""
+    if [ "$USE_SSH_AGENT" = "true" ]; then
+        agent_str="-A "
+    fi
+    
+    # Build connection string
+    echo "$protocol $identity_str$port_str$agent_str$user@$ip"
 }
 
 # SSH Connect Configuration
