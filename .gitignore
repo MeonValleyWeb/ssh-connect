@@ -5,6 +5,8 @@ debug-*.sh
 *-test.sh
 bedrock-test.sh
 add-all-sites.sh
+add-sites.sh
+spinupwp-debug.sh
 test-*.sh
 
 # Local configuration
