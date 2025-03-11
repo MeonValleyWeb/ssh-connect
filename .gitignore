@@ -14,11 +14,13 @@ ssh-connect-complete
 .ssh-connect/
 ~/.ssh-connect/
 
+
 # Temporary files
 *.tmp
 *.bak
 *.backup
 *~
+script-commands.txt
 
 # OS-specific files
 .DS_Store
