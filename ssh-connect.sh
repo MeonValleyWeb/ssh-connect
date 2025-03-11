@@ -413,32 +413,23 @@ is_bedrock_site() {
     fi
     
     echo -e "\n${YELLOW}Checking if $domain is a Bedrock site...${NC}"
-    echo -e "${BLUE}Testing path: $path ${NC}"
     
-    # For SpinupWP sites, the Bedrock files are directly in the /sites/domain/files directory
-    local check_cmd="cd $path 2>/dev/null && "
-    check_cmd+="(test -f composer.json && echo 'COMPOSER:YES' || echo 'COMPOSER:NO') && "
-    check_cmd+="(test -f composer.json && grep -q 'roots/bedrock' composer.json && echo 'BEDROCK:YES' || echo 'BEDROCK:NO') && "
-    check_cmd+="(test -d web/wp && echo 'WEB_WP:YES' || echo 'WEB_WP:NO') && "
-    check_cmd+="(test -f .env && echo 'ENV:YES' || echo 'ENV:NO')"
+    # Use a direct, simpler approach that will work with passphrase keys
+    local check_cmd="cd $path && if [ -f composer.json ] && [ -d web/wp ] && [ -f .env ]; then echo 'BEDROCK'; fi"
     
-    # Run SSH command without batch mode to allow for passphrase prompt
-    local ssh_cmd="ssh -i $DEFAULT_IDENTITY -o StrictHostKeyChecking=no -o ConnectTimeout=5"
-    local result=$($ssh_cmd "$username@$ip" "$check_cmd" 2>/dev/null)
+    # Run a direct command that works with passphrase prompt
+    echo -e "${BLUE}Checking for Bedrock at path: $path${NC}"
     
-    echo -e "${BLUE}Detection results:${NC} $result"
+    # We're using -t here to force TTY allocation, which helps with passphrase prompts
+    local result=$(ssh -t "$username@$ip" "$check_cmd" 2>/dev/null)
     
-    # Check if any Bedrock indicators were found
-    if echo "$result" | grep -q "YES"; then
-        # We only need one positive result to consider it a Bedrock site
-        if echo "$result" | grep -q "BEDROCK:YES" || (echo "$result" | grep -q "WEB_WP:YES" && echo "$result" | grep -q "COMPOSER:YES"); then
-            echo -e "${GREEN}✓ Bedrock site detected${NC}"
-            return 0  # True - it is a Bedrock site
-        fi
+    if [[ "$result" == *"BEDROCK"* ]]; then
+        echo -e "${GREEN}✓ Bedrock site detected${NC}"
+        return 0  # True - it is a Bedrock site
+    else
+        echo -e "${RED}✗ Not a Bedrock site${NC}"
+        return 1  # False - not a Bedrock site
     fi
-    
-    echo -e "${RED}✗ Not a Bedrock site${NC}"
-    return 1  # False - not a Bedrock site
 }
 
 # Function to build connection string
